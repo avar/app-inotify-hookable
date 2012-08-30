@@ -212,6 +212,16 @@ sub setup_watch {
 
     my $notifier = $self->_notifier;
     my $watches  = $self->_watches;
+    my $debug    = $self->debug;
+
+    # Remove any watches for directories we're watching that have gone away
+    EXISTING_WATCH: for my $directory (keys %$watches) {
+        unless (-d $directory) {
+            $watches->{$directory}->remove;
+            delete $watches->{$directory};
+            $self->log("Removed watch on directory: $directory") if $debug;
+        }
+    }
 
     # Add new watches
     NEW_WATCH: for my $directory ($self->all_directories_to_watch) {
@@ -238,7 +248,8 @@ sub setup_watch {
                     Linux::Inotify::MOVED_TO
                 )
             );
-            $watches->{$directory} = undef;
+            $self->log("Now watching directory: $directory") if $debug;
+            $watches->{$directory} = $watch;
         } catch {
             my $error = $_;
 

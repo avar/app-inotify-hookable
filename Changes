@@ -2,6 +2,8 @@ Revision history for App::Inotify::Hookable
 
 {{$NEXT}}
 
+    - We'll now remove watches on directories that have been deleted
+
 0.01 2012-05-02 20:55:31
 
     - Initial buggy version
