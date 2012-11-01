@@ -17,6 +17,15 @@ has debug => (
     documentation => "Should we print debug info about what we're doing?",
 );
 
+has quiet => (
+    metaclass     => 'MooseX::Getopt::Meta::Attribute',
+    is            => 'ro',
+    isa           => Bool,
+    default       => 0,
+    cmd_aliases   => 'q',
+    documentation => q{Don't log noisy information},
+);
+
 has watch_directories => (
     metaclass     => 'MooseX::Getopt::Meta::Attribute',
     is            => 'ro',
@@ -81,6 +90,7 @@ sub _build__notifier { Linux::Inotify->new }
 
 sub log {
     my ($self, $message) = @_;
+    return if $self->quiet;
     print STDERR scalar(localtime()), " : ", $message, "\n";
 };
 
