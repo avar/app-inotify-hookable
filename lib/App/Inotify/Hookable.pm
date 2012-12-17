@@ -36,6 +36,16 @@ has watch_directories => (
     documentation => "What directories should we watch?",
 );
 
+has watch_files => (
+    metaclass     => 'MooseX::Getopt::Meta::Attribute',
+    is            => 'ro',
+    isa           => ArrayRef[Str],
+    default       => sub { [] },
+    cmd_aliases   => 'f',
+    auto_deref    => 1,
+    documentation => "What files should we watch?",
+);
+
 has recursive => (
     metaclass     => 'MooseX::Getopt::Meta::Attribute',
     is            => 'ro',
@@ -94,18 +104,24 @@ sub log {
     print STDERR scalar(localtime()), " : ", $message, "\n";
 };
 
+sub watch_paths {
+    my $self = shift;
+
+    return ($self->watch_directories, $self->watch_files);
+}
+
 sub run {
     my ($self) = @_;
 
     # Catch sigint so DEMOLISH can run 
     local $SIG{INT} = sub { exit 1 };
 
-    my @watching = $self->watch_directories;
+    my @watching = $self->watch_paths;
     die "You need to give me something to watch" unless @watching;
     $self->log(
         "Starting up, " .
         ($self->recursive ? "recursively " : "") .
-        "watching directories <@watching>"
+        "watching paths <@watching>"
     );
 
     my $notifier = $self->_notifier;
@@ -160,7 +176,7 @@ sub run {
             }
         }
 
-        $self->log("Had changes in your directories");
+        $self->log("Had changes in your paths");
 
         if ($should_log_modified_paths) {
             $self->log("Checking for path-specific hooks") if $self->debug;
@@ -203,18 +219,21 @@ sub run {
     return 1;
 }
 
-sub all_directories_to_watch {
+sub all_paths_to_watch {
     my ($self) = @_;
     my @watch_directories = $self->watch_directories;
+    my @watch_files       = $self->watch_files;
     my @directories;
-    if ($self->recursive) {
-        chomp(@directories = qx[find @watch_directories -type d]);
-    } else {
-        @directories = @watch_directories;
+    if (@watch_directories) {
+        if ($self->recursive) {
+            chomp(@directories = qx[find @watch_directories -type d]);
+        } else {
+            @directories = @watch_directories;
+        }
     }
     # Don't notify on "git status" (creates a lock) and other similar
     # operations.
-    grep { not m[/\.git/?] } @directories;
+    ((grep { not m[/\.git/?] } @directories), @watch_files);
 }
 
 sub setup_watch {
@@ -225,41 +244,60 @@ sub setup_watch {
     my $debug    = $self->debug;
 
     # Remove any watches for directories we're watching that have gone away
-    EXISTING_WATCH: for my $directory (keys %$watches) {
-        unless (-d $directory) {
-            $watches->{$directory}->remove;
-            delete $watches->{$directory};
-            $self->log("Removed watch on directory: $directory") if $debug;
+    EXISTING_WATCH: for my $path (keys %$watches) {
+        my $type = $watches->{$path}{type};
+        unless ($type eq 'directory' ? -d $path : -f $path) {
+            $watches->{$path}{watch}->remove;
+            delete $watches->{$path};
+            $self->log("Removed watch on $type: $path") if $debug;
         }
     }
 
     # Add new watches
-    NEW_WATCH: for my $directory ($self->all_directories_to_watch) {
-        next NEW_WATCH if exists $watches->{$directory};
+    NEW_WATCH: for my $path ($self->all_paths_to_watch) {
+        next NEW_WATCH if exists $watches->{$path};
         try {
             my $watch = $notifier->add_watch(
-                $directory,
+                $path,
                 (
-                    # This is a directory
-                    Linux::Inotify::ISDIR |
-                    # Modifications I care about
-                    Linux::Inotify::MODIFY
-                    |
-                    Linux::Inotify::ATTRIB
-                    |
-                    Linux::Inotify::CREATE
-                    |
-                    Linux::Inotify::DELETE
-                    |
-                    Linux::Inotify::DELETE_SELF
-                    |
-                    Linux::Inotify::MOVED_FROM
-                    |
-                    Linux::Inotify::MOVED_TO
+                    # Is this is a directory?
+                    (-d $path ? 
+                        Linux::Inotify::ISDIR 
+                        |
+                        # Modifications I care about
+                        Linux::Inotify::MODIFY
+                        |
+                        Linux::Inotify::ATTRIB
+                        |
+                        Linux::Inotify::CREATE
+                        |
+                        Linux::Inotify::DELETE
+                        |
+                        Linux::Inotify::DELETE_SELF
+                        |
+                        Linux::Inotify::MOVED_FROM
+                        |
+                        Linux::Inotify::MOVED_TO
+                    :
+                        # modifications for files
+                        Linux::Inotify::MODIFY
+                        |
+                        Linux::Inotify::ATTRIB
+                        |
+                        Linux::Inotify::CLOSE_WRITE
+                        |
+                        Linux::Inotify::DELETE_SELF
+                        |
+                        Linux::Inotify::MOVE
+                    )
                 )
             );
-            $self->log("Now watching directory: $directory") if $debug;
-            $watches->{$directory} = $watch;
+            my $type = -d $path ? 'directory' : 'file';
+
+            $self->log("Now watching $type: $path") if $debug;
+
+            $watches->{$path}{watch} = $watch;
+            $watches->{$path}{type}  = $type;
         } catch {
             my $error = $_;
 
@@ -317,6 +355,12 @@ restart the webserver or compress those assets if anything changes:
         --on-modify-path-command "^(/etc/uwsgi|/git_tree/central|/etc/app-config)=sudo /etc/init.d/uwsgi restart" \
         --on-modify-path-command "^/git_tree/static_assets=(cd /git_tree/static_assets && compress_static_assets)"
 
+Or watch specific files:
+
+    inotify-hookable \
+        --watch-files /var/www/cgi-bin/mod_perl_handler \
+        --on-modify-command "apachectl restart"
+
 =head1 DESCRIPTION
 
 This simple command-line program is my replacement for the
@@ -343,6 +387,11 @@ something). Patches welcome.
 
 Specify this to watch a directory, you can give this however many
 times you like to watch lots of directories.
+
+=head2 C<-f> or C<--watch-files>
+
+Watch a file, specify multiple times for multiple files.
+You can watch files and directories in the same command.
 
 =head2 C<-r> or C<--recursive>
 
