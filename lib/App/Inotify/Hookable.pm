@@ -2,9 +2,13 @@
 package App::Inotify::Hookable;
 use Moose;
 use MooseX::Types::Moose ':all';
-use Linux::Inotify;
+use Linux::Inotify2;
+use POSIX ':errno_h';
 use Time::HiRes qw(gettimeofday tv_interval ualarm);
 use Try::Tiny;
+use Data::BitMask;
+use Data::Dumper;
+use Class::Inspector;
 
 with 'MooseX::Getopt::Dashes';
 
@@ -92,11 +96,17 @@ has _watches => (
 
 has _notifier => (
     is         => 'rw',
-    isa        => 'Linux::Inotify',
+    isa        => 'Linux::Inotify2',
     lazy_build => 1,
 );
 
-sub _build__notifier { Linux::Inotify->new }
+has _bitmask => (
+    is         => 'rw',
+    isa        => 'Data::BitMask',
+    lazy_build => 1,
+);
+
+sub _build__notifier { Linux::Inotify2->new }
 
 sub log {
     my ($self, $message) = @_;
@@ -109,6 +119,14 @@ sub watch_paths {
 
     return ($self->watch_directories, $self->watch_files);
 }
+
+my $dumper_squashed = sub {
+    my $val = shift;
+ 
+    my $dd = Data::Dumper->new([]);
+    $dd->Terse(1)->Indent(1)->Useqq(1)->Deparse(1)->Quotekeys(0)->Sortkeys(1)->Indent(0);
+    return $dd->Values([ $val ])->Dump;
+};
 
 sub run {
     my ($self) = @_;
@@ -151,7 +169,11 @@ sub run {
 
       WAIT: while (1) {
             for my $event (@events) {
-                $event->print if $self->debug;
+                print "EVENT: ", $dumper_squashed->({
+                    cookie => $event->cookie,
+                    fullname => $event->fullname,
+                    mask => $self->_bitmask->explain_mask($event->mask),
+                }), "\n" if $self->debug;
             }
             $log_modified_paths->(\@events) if $should_log_modified_paths;
             @events = ();
@@ -247,7 +269,7 @@ sub setup_watch {
     EXISTING_WATCH: for my $path (keys %$watches) {
         my $type = $watches->{$path}{type};
         unless ($type eq 'directory' ? -d $path : -f $path) {
-            $watches->{$path}{watch}->remove;
+            $watches->{$path}{watch}->cancel;
             delete $watches->{$path};
             $self->log("Removed watch on $type: $path") if $debug;
         }
@@ -256,52 +278,46 @@ sub setup_watch {
     # Add new watches
     NEW_WATCH: for my $path ($self->all_paths_to_watch) {
         next NEW_WATCH if exists $watches->{$path};
-        try {
-            my $watch = $notifier->add_watch(
-                $path,
-                (
-                    # Is this is a directory?
-                    (-d $path ? 
-                        Linux::Inotify::ISDIR 
-                        |
-                        # Modifications I care about
-                        Linux::Inotify::MODIFY
-                        |
-                        Linux::Inotify::ATTRIB
-                        |
-                        Linux::Inotify::CREATE
-                        |
-                        Linux::Inotify::DELETE
-                        |
-                        Linux::Inotify::DELETE_SELF
-                        |
-                        Linux::Inotify::MOVED_FROM
-                        |
-                        Linux::Inotify::MOVED_TO
-                    :
-                        # modifications for files
-                        Linux::Inotify::MODIFY
-                        |
-                        Linux::Inotify::ATTRIB
-                        |
-                        Linux::Inotify::CLOSE_WRITE
-                        |
-                        Linux::Inotify::DELETE_SELF
-                        |
-                        Linux::Inotify::MOVE
-                    )
+        my $watch = $notifier->watch(
+            $path,
+            (
+                # Is this is a directory?
+                (-d $path ? 
+                    # Modifications I care about
+                    IN_MODIFY
+                    |
+                    IN_ATTRIB
+                    |
+                    IN_CREATE
+                    |
+                    IN_DELETE
+                    |
+                    IN_DELETE_SELF
+                    |
+                    IN_MOVED_FROM
+                    |
+                    IN_MOVED_TO
+                    |
+                    IN_MOVE_SELF
+                :
+                    # modifications for files
+                    IN_MODIFY
+                    |
+                    IN_ATTRIB
+                    |
+                    IN_CLOSE_WRITE
+                    |
+                    IN_DELETE_SELF
+                    |
+                    IN_MOVE_SELF
                 )
-            );
-            my $type = -d $path ? 'directory' : 'file';
+            )
+        );
 
-            $self->log("Now watching $type: $path") if $debug;
+        if (not $watch) {
+            my $error = $!;
 
-            $watches->{$path}{watch} = $watch;
-            $watches->{$path}{type}  = $type;
-        } catch {
-            my $error = $_;
-
-            if ($error =~ /No space left on device/) {
+            if ($error == ENOSPC) {
                 die <<"DIE"
 We probably exceeded the maximum number of user watches since we had a
 "No space left on device" error. Try something like this command and
@@ -316,8 +332,25 @@ DIE
             } else {
                 die $error;
             }
-        };
-    };
+        }
+
+        my $type = -d $path ? 'directory' : 'file';
+
+        $self->log("Now watching $type: $path") if $debug;
+
+        $watches->{$path}{watch} = $watch;
+        $watches->{$path}{type}  = $type;
+    }
+}
+
+sub _build__bitmask {
+    my %masks;
+    @masks{grep /^IN_/, @{ Class::Inspector->methods("Linux::Inotify2") }} = ();
+    foreach my $const (keys %masks) {
+        $masks{$const} = Linux::Inotify2->$const;
+    }
+
+    return Data::BitMask->new(%masks);
 }
 
 sub DEMOLISH {
@@ -325,7 +358,6 @@ sub DEMOLISH {
     my $notifier = $self->_notifier;
 
     $self->log("Demolishing $notifier");
-    $notifier->close;
 }
 
 1;
@@ -368,7 +400,7 @@ functionality offered by L<Plack>'s L<Filesys::Notify::Simple>. I
 found that on very large git trees Plack would spend an inordinate
 amount watching the filesystem for changes.
 
-This program uses L<Linux::Inotify>, so the kernel will notify it
+This program uses L<Linux::Inotify2>, so the kernel will notify it
 B<instantly> when something changes (actually it's so fast that we
 have to work around how fast it sends us events).
 

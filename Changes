@@ -2,6 +2,9 @@ Revision history for App::Inotify::Hookable
 
 {{$NEXT}}
 
+    - Switch from Linux::Inotify to Linux::Inotify2
+    - Support watching files (-f or --watch-files)
+
 0.02 2012-08-30 09:47:20
 
     - We'll now remove watches on directories that have been deleted
