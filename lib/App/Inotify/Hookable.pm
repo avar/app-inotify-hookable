@@ -9,6 +9,7 @@ use Try::Tiny;
 use Data::BitMask;
 use Data::Dumper;
 use Class::Inspector;
+use File::Find::Rule;
 
 with 'MooseX::Getopt::Dashes';
 
@@ -84,7 +85,17 @@ has buffer_time => (
     isa           => Int,
     default       => 100,
     cmd_aliases   => 't',
-    documentation => "How many ms should we buffer inotify for?",
+    documentation => "How many us should we buffer inotify for? (default 100)",
+);
+
+has ignore_paths => (
+    metaclass     => 'MooseX::Getopt::Meta::Attribute',
+    is            => 'ro',
+    isa           => ArrayRef[Str],
+    default       => sub { [ '\..*sw.\z', '\.\#[^/]+\z' ] },
+    cmd_aliases   => 'i',
+    auto_deref    => 1,
+    documentation => q|Regexes for which paths we should ignore (default '\..*sw.\z' and '\.\#[^/]+\z' for vim and emacs swap files.)|
 );
 
 has _watches => (
@@ -106,6 +117,8 @@ has _bitmask => (
     lazy_build => 1,
 );
 
+my $find = 'File::Find::Rule';
+
 sub _build__notifier { Linux::Inotify2->new }
 
 sub log {
@@ -113,12 +126,6 @@ sub log {
     return if $self->quiet;
     print STDERR scalar(localtime()), " : ", $message, "\n";
 };
-
-sub watch_paths {
-    my $self = shift;
-
-    return ($self->watch_directories, $self->watch_files);
-}
 
 my $dumper_squashed = sub {
     my $val = shift;
@@ -134,12 +141,19 @@ sub run {
     # Catch sigint so DEMOLISH can run 
     local $SIG{INT} = sub { exit 1 };
 
-    my @watching = $self->watch_paths;
-    die "You need to give me something to watch" unless @watching;
+    my @watch_dirs  = $self->watch_directories;
+    my @watch_files = $self->watch_files;
+    die "You need to give me something to watch" unless @watch_dirs || @watch_files;
     $self->log(
         "Starting up, " .
-        ($self->recursive ? "recursively " : "") .
-        "watching paths <@watching>"
+        (@watch_dirs ?
+            ($self->recursive ? "recursively " : "") .
+            "watching directories <@watch_dirs>" .
+            (@watch_files ? " and " : "")
+        : "") .
+        (@watch_files ?
+            "watching files <@watch_files>"
+        : "")
     );
 
     my $notifier = $self->_notifier;
@@ -156,26 +170,36 @@ sub run {
         my $sleep_us = $sleep_ms * 10**3;
 
         my %modified_paths;
-        my $should_log_modified_paths = keys %{ $self->on_modify_path_command };
+
         my $log_modified_paths = sub {
             my $events = shift;
             for my $event (@$events) {
                 my $fullname = $event->fullname;
                 $fullname =~ s[//][/]g; # We have double slashes for some reason
-                $modified_paths{$fullname} = undef;
+
+                my $ignore_path = 0;
+
+                IGNORE_PATHS: foreach my $re ($self->ignore_paths) {
+                    if ($fullname =~ m{(?:/|^)$re}) {
+                        $ignore_path = 1;
+                        last IGNORE_PATHS;
+                    }
+                }
+
+                $modified_paths{$fullname} = undef if not $ignore_path;
             }
             return;
         };
 
       WAIT: while (1) {
             for my $event (@events) {
-                print "EVENT: ", $dumper_squashed->({
+                $self->log("EVENT: " . $dumper_squashed->({
                     cookie => $event->cookie,
                     fullname => $event->fullname,
                     mask => $self->_bitmask->explain_mask($event->mask),
-                }), "\n" if $self->debug;
+                })) if $self->debug;
             }
-            $log_modified_paths->(\@events) if $should_log_modified_paths;
+            $log_modified_paths->(\@events);
             @events = ();
             try {
                 local $SIG{ALRM} = sub {
@@ -191,47 +215,49 @@ sub run {
             if (@events) {
                 $self->log("We have events, waiting another $sleep_ms us and checking again") if $self->debug;
 
-                $log_modified_paths->(\@events) if $should_log_modified_paths;
+                $log_modified_paths->(\@events);
             } else {
                 # No more events
                 last WAIT;
             }
         }
 
-        $self->log("Had changes in your paths");
+        if (keys %modified_paths) {
+            $self->log("Had changes in your paths");
 
-        if ($should_log_modified_paths) {
-            $self->log("Checking for path-specific hooks") if $self->debug;
-            my %hooks_to_run;
-            my $on_modify_path_command = $self->on_modify_path_command;
-            for my $path (keys %modified_paths) {
-                for my $path_hook (keys %$on_modify_path_command) {
-                    $hooks_to_run{$path_hook} = 1
-                        if $path =~ /$path_hook/;
+            if (keys %{ $self->on_modify_path_command }) {
+                $self->log("Checking for path-specific hooks") if $self->debug;
+                my %hooks_to_run;
+                my $on_modify_path_command = $self->on_modify_path_command;
+                for my $path (keys %modified_paths) {
+                    for my $path_hook (keys %$on_modify_path_command) {
+                        $hooks_to_run{$path_hook} = 1
+                            if $path =~ /$path_hook/;
+                    }
+                }
+                if (keys %hooks_to_run) {
+                    $self->log("Running path-specific hooks");
+                    my $t0 = [gettimeofday];
+                    for my $hook_to_run (keys %hooks_to_run) {
+                        my $command = $on_modify_path_command->{$hook_to_run};
+                        $self->log("Running path hook <$hook_to_run>: <$command>");
+                        system $command;
+                    }
+                    my $elapsed = tv_interval ( $t0 );
+                    $self->log(sprintf "FINISHED running path-specific hooks. Took %.2fs", $elapsed);
                 }
             }
-            if (keys %hooks_to_run) {
-                $self->log("Running path-specific hooks");
+
+            if (my @commands = $self->on_modify_command) {
+                $self->log("Running global hooks");
                 my $t0 = [gettimeofday];
-                for my $hook_to_run (keys %hooks_to_run) {
-                    my $command = $on_modify_path_command->{$hook_to_run};
-                    $self->log("Running path hook <$hook_to_run>: <$command>");
+                for my $command (@commands) {
+                    $self->log("Running <$command>");
                     system $command;
                 }
                 my $elapsed = tv_interval ( $t0 );
-                $self->log(sprintf "FINISHED running path-specific hooks. Took %.2fs", $elapsed);
+                $self->log(sprintf "FINISHED on-modify command. Took %.2fs", $elapsed);
             }
-        }
-
-        if (my @commands = $self->on_modify_command) {
-            $self->log("Running global hooks");
-            my $t0 = [gettimeofday];
-            for my $command (@commands) {
-                $self->log("Running <$command>");
-                system $command;
-            }
-            my $elapsed = tv_interval ( $t0 );
-            $self->log(sprintf "FINISHED restarting. Took %.2fs", $elapsed);
         }
 
         # Re-setup the watching if needed, we may have new directories.
@@ -248,14 +274,16 @@ sub all_paths_to_watch {
     my @directories;
     if (@watch_directories) {
         if ($self->recursive) {
-            chomp(@directories = qx[find @watch_directories -type d]);
+            @directories = $find->directory->not(
+                # Don't notify on "git status" (creates a lock) and other similar
+                # operations.
+                $find->new->name('.git')
+            )->in(@watch_directories);
         } else {
             @directories = @watch_directories;
         }
     }
-    # Don't notify on "git status" (creates a lock) and other similar
-    # operations.
-    ((grep { not m[/\.git/?] } @directories), @watch_files);
+    return (@directories, @watch_files);
 }
 
 sub setup_watch {
@@ -265,24 +293,33 @@ sub setup_watch {
     my $watches  = $self->_watches;
     my $debug    = $self->debug;
 
-    # Remove any watches for directories we're watching that have gone away
-    EXISTING_WATCH: for my $path (keys %$watches) {
-        my $type = $watches->{$path}{type};
-        unless ($type eq 'directory' ? -d $path : -f $path) {
+    # Add or re-setup watches
+    WATCH: for my $path ($self->all_paths_to_watch) {
+        my $have_watch  = exists $watches->{$path};
+        my $type        = -d $path ? 'directory' : 'file';
+        my $path_exists = -e $path;
+
+        my $inode_number = (stat $path)[1] if $path_exists;
+
+        # path has gone away
+        if ($have_watch && (not $path_exists)) {
             $watches->{$path}{watch}->cancel;
             delete $watches->{$path};
-            $self->log("Removed watch on $type: $path") if $debug;
+            $self->log("$type '$path' has gone away, removing watch") if $debug;
+            next WATCH;
         }
-    }
 
-    # Add new watches
-    NEW_WATCH: for my $path ($self->all_paths_to_watch) {
-        next NEW_WATCH if exists $watches->{$path};
+        # object got replaced, remove the watch (we'll add a new watch for the new object)
+        if ($have_watch && $watches->{$path}{inode} ne $inode_number) {
+            $watches->{$path}{watch}->cancel;
+            $self->log("$type '$path' was replaced, replacing watch") if $debug;
+        }
+
         my $watch = $notifier->watch(
             $path,
             (
                 # Is this is a directory?
-                (-d $path ? 
+                ($type eq 'directory' ? 
                     # Modifications I care about
                     IN_MODIFY
                     |
@@ -334,12 +371,11 @@ DIE
             }
         }
 
-        my $type = -d $path ? 'directory' : 'file';
-
-        $self->log("Now watching $type: $path") if $debug;
+        $self->log("Now watching $type: $path") if !$have_watch && $debug;
 
         $watches->{$path}{watch} = $watch;
         $watches->{$path}{type}  = $type;
+        $watches->{$path}{inode} = $inode_number;
     }
 }
 
@@ -408,6 +444,9 @@ The result is that you can run this e.g. in a screen session and have
 it watch your development environment, and your webserver will have
 begun restarting before your finger leaves the I<save> button.
 
+vim and emacs temporary files are ignored by default (see C<--ignore-paths>.)
+so you can edit your files without your server restarting unnecessarily.
+
 Currently the command-line interface for this is the only one that
 really makes sense, this module is entirely blocking (although it
 could probably run in another process via L<POE> or
@@ -453,10 +492,18 @@ run something like:
 You might get an event for F<foo> in one batch, followed by an event
 for F<bar> later on.
 
-To deal with this we enter a loop when we start getting events and
-sleep for a default of 100 ms, as long as we keep getting events we
-keep sleeping for 100 ms, but as soon as we haven't received anything
-new we fire off our event handlers.
+To deal with this we enter a loop when we start getting events and sleep for a
+default of 100 microseconds, as long as we keep getting events we keep sleeping
+for 100 microseconds, but as soon as we haven't received anything new we fire
+off our event handlers.
+
+=head2 C<-i> or C<--ignore-paths>
+
+Regexes for files/directories to ignore events for. By default this is set to
+regexes for vim and emacs temporary files, C<qr{\..*sw.\z}> and
+C<qr{\.\#[^/]+\z}> respectively.
+
+The regexes match after any C</> in the path or the beginning of the string.
 
 =head2 C<-d> or C<--debug>
 
