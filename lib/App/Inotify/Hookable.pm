@@ -101,7 +101,7 @@ has ignore_paths => (
 
 has _watches => (
     is            => 'ro',
-    isa           => 'HashRef',
+    isa           => HashRef,
     default       => sub { +{} },
     documentation => "What stuff are we watching?",
 );
