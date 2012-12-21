@@ -10,6 +10,7 @@ use Data::BitMask;
 use Data::Dumper;
 use Class::Inspector;
 use File::Find::Rule;
+use List::MoreUtils qw(uniq);
 
 with 'MooseX::Getopt::Dashes';
 
@@ -115,6 +116,11 @@ has _bitmask => (
     is         => 'rw',
     isa        => 'Data::BitMask',
     lazy_build => 1,
+);
+
+has _previously_watched_directories => (
+    is         => 'rw',
+    isa        => ArrayRef[Str],
 );
 
 my $find = 'File::Find::Rule';
@@ -310,8 +316,20 @@ sub setup_watch {
     my $watches_removed  = 0;
     my $watches_replaced = 0;
 
+    my $previously_watched_directories = $self->_previously_watched_directories;
+    my @previously_watched_directories = $previously_watched_directories ? @$previously_watched_directories : ();
+    my @current_paths_to_watch         = $self->all_paths_to_watch;
+
+    my @all_paths_to_watch = uniq(
+        # The stuff we're watching now
+        @current_paths_to_watch,
+        # what we were watching earlier, so we know to remove watches
+        # for that if they've been removed.
+        @previously_watched_directories,
+    );
+
     # Add or re-setup watches
-    WATCH: for my $path ($self->all_paths_to_watch) {
+    WATCH: for my $path (@all_paths_to_watch) {
         my $have_watch   = exists $watches->{$path};
         my $type         = -d $path ? 'directory' : 'file';
         my $path_exists  = -e $path;
@@ -320,6 +338,7 @@ sub setup_watch {
         # path has gone away
         if ($have_watch && (not $path_exists)) {
             $watches->{$path}{watch}->cancel;
+            my $type = $watches->{$path}{type}; # In this case we care what it *was*
             delete $watches->{$path};
             $self->log("$type '$path' has gone away, removing watch") if $debug;
             $watches_removed++;
@@ -329,6 +348,7 @@ sub setup_watch {
         # object got replaced, remove the watch (we'll add a new watch for the new object)
         if ($have_watch && $watches->{$path}{inode} ne $inode_number) {
             $watches->{$path}{watch}->cancel;
+            my $type = $watches->{$path}{type}; # In this case we care what it *was*
             $watches_replaced++;
             $self->log("$type '$path' was replaced, replacing watch") if $debug;
         }
@@ -396,6 +416,10 @@ DIE
         $watches->{$path}{type}  = $type;
         $watches->{$path}{inode} = $inode_number;
     }
+
+    # Set this to the stuff we were just going over so we'll know to
+    # delete stuff from there in the future.
+    $self->_previously_watched_directories(\@current_paths_to_watch);
 
     my $elapsed = tv_interval ( $t0 );
     my $total_num_watches = scalar keys %{ $notifier->{w} };
