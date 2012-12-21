@@ -2,6 +2,9 @@ Revision history for App::Inotify::Hookable
 
 {{$NEXT}}
 
+    - Unbreak the ignoring of paths with ".git" in them (to not fire
+      on git operations) broken in 0.04.
+
 0.05 2012-12-19 00:35:16
 
     - fix missing dep on File::Find::Rule

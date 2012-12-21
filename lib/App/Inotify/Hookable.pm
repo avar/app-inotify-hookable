@@ -275,9 +275,20 @@ sub all_paths_to_watch {
     if (@watch_directories) {
         if ($self->recursive) {
             @directories = $find->directory->not(
-                # Don't notify on "git status" (creates a lock) and other similar
-                # operations.
-                $find->new->name('.git')
+                $find->new->exec(
+                    sub {
+                        my ($shortname, $path, $fullname) = @_;
+                        $fullname =~ m[
+                            (?:
+                                # The .git directory
+                                /\.git\z
+                             |
+                                # Something in the .git directory
+                                /\.git/
+                            )
+                        ]x;
+                    }
+                )
             )->in(@watch_directories);
         } else {
             @directories = @watch_directories;
