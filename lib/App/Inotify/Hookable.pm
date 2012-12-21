@@ -304,6 +304,10 @@ sub setup_watch {
     my $watches  = $self->_watches;
     my $debug    = $self->debug;
 
+    my $watches_added    = 0;
+    my $watches_removed  = 0;
+    my $watches_replaced = 0;
+
     # Add or re-setup watches
     WATCH: for my $path ($self->all_paths_to_watch) {
         my $have_watch  = exists $watches->{$path};
@@ -317,12 +321,14 @@ sub setup_watch {
             $watches->{$path}{watch}->cancel;
             delete $watches->{$path};
             $self->log("$type '$path' has gone away, removing watch") if $debug;
+            $watches_removed++;
             next WATCH;
         }
 
         # object got replaced, remove the watch (we'll add a new watch for the new object)
         if ($have_watch && $watches->{$path}{inode} ne $inode_number) {
             $watches->{$path}{watch}->cancel;
+            $watches_replaced++;
             $self->log("$type '$path' was replaced, replacing watch") if $debug;
         }
 
@@ -382,12 +388,15 @@ DIE
             }
         }
 
+        $watches_added++;
         $self->log("Now watching $type: $path") if !$have_watch && $debug;
 
         $watches->{$path}{watch} = $watch;
         $watches->{$path}{type}  = $type;
         $watches->{$path}{inode} = $inode_number;
     }
+
+    $self->log("Set up watches. $watches_added added, $watches_removed removed, $watches_replaced replaced.");
 }
 
 sub _build__bitmask {
