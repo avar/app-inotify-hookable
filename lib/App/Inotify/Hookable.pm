@@ -300,6 +300,8 @@ sub all_paths_to_watch {
 sub setup_watch {
     my ($self) = @_;
 
+    my $t0 = [gettimeofday];
+
     my $notifier = $self->_notifier;
     my $watches  = $self->_watches;
     my $debug    = $self->debug;
@@ -395,7 +397,10 @@ DIE
         $watches->{$path}{inode} = $inode_number;
     }
 
-    $self->log("Set up watches. $watches_added added, $watches_removed removed, $watches_replaced replaced.");
+    my $elapsed = tv_interval ( $t0 );
+    my $total_num_watches = scalar keys %{ $notifier->{w} };
+    $self->log(sprintf "FINISHED setting up watches. Took %.2fs with $watches_added watches added, $watches_removed removed, $watches_replaced replaced. Have $total_num_watches total watches", $elapsed);
+    return;
 }
 
 sub _build__bitmask {
