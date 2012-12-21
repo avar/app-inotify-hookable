@@ -310,10 +310,9 @@ sub setup_watch {
 
     # Add or re-setup watches
     WATCH: for my $path ($self->all_paths_to_watch) {
-        my $have_watch  = exists $watches->{$path};
-        my $type        = -d $path ? 'directory' : 'file';
-        my $path_exists = -e $path;
-
+        my $have_watch   = exists $watches->{$path};
+        my $type         = -d $path ? 'directory' : 'file';
+        my $path_exists  = -e $path;
         my $inode_number = (stat $path)[1] if $path_exists;
 
         # path has gone away
