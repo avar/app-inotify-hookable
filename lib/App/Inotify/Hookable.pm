@@ -345,12 +345,19 @@ sub setup_watch {
             next WATCH;
         }
 
-        # object got replaced, remove the watch (we'll add a new watch for the new object)
-        if ($have_watch && $watches->{$path}{inode} ne $inode_number) {
-            $watches->{$path}{watch}->cancel;
-            my $type = $watches->{$path}{type}; # In this case we care what it *was*
-            $watches_replaced++;
-            $self->log("$type '$path' was replaced, replacing watch") if $debug;
+        if ($have_watch) {
+            if ($watches->{$path}{inode} eq $inode_number) {
+                # We have this watch already, and it hasn't changed the
+                # inode number, so no need to go and add it again.
+                next WATCH;
+            } else {
+                # object got replaced, remove the watch (we'll add a
+                # new watch for the new object).
+                $watches->{$path}{watch}->cancel;
+                my $type = $watches->{$path}{type}; # In this case we care what it *was*
+                $watches_replaced++;
+                $self->log("$type '$path' was replaced, replacing watch") if $debug;
+            }
         }
 
         my $watch = $notifier->watch(
