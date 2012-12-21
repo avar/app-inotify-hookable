@@ -2,6 +2,10 @@ Revision history for App::Inotify::Hookable
 
 {{$NEXT}}
 
+    - Use find(1) again instead of File::Find::Rule, it's noticably
+      faster and there's no point in this module being non-POSIX
+      postable since it relies on a Linux-specific facility.
+
 0.06 2012-12-21 15:36:41
 
     - Unbreak the ignoring of paths with ".git" in them (to not fire
