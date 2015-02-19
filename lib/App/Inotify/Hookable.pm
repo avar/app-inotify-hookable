@@ -85,7 +85,7 @@ has buffer_time => (
     isa           => Int,
     default       => 100,
     cmd_aliases   => 't',
-    documentation => "How many us should we buffer inotify for? (default 100)",
+    documentation => "How many milliseconds should we buffer inotify for? (default 100)",
 );
 
 has ignore_paths => (
@@ -212,11 +212,11 @@ sub run {
                 @events = $notifier->read;
                 ualarm(0);
             } catch {
-                $self->log("We have no more events with a timeout of $sleep_ms us") if $self->debug;
+                $self->log("We have no more events with a timeout of $sleep_ms ms") if $self->debug;
             };
 
             if (@events) {
-                $self->log("We have events, waiting another $sleep_ms us and checking again") if $self->debug;
+                $self->log("We have events, waiting another $sleep_ms ms and checking again") if $self->debug;
 
                 $log_modified_paths->(\@events);
             } else {
