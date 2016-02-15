@@ -2,6 +2,8 @@ Revision history for App::Inotify::Hookable
 
 {{$NEXT}}
 
+0.09 2016-02-15 20:33:43
+
     - I forgot to write a changelog for 0.08, this release is
       identical to it except I'm now updating the Changes file:
 
