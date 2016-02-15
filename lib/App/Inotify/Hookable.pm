@@ -132,7 +132,7 @@ sub log {
 
 my $dumper_squashed = sub {
     my $val = shift;
- 
+
     my $dd = Data::Dumper->new([]);
     $dd->Terse(1)->Indent(1)->Useqq(1)->Deparse(1)->Quotekeys(0)->Sortkeys(1)->Indent(0);
     return $dd->Values([ $val ])->Dump;
@@ -141,7 +141,7 @@ my $dumper_squashed = sub {
 sub run {
     my ($self) = @_;
 
-    # Catch sigint so DEMOLISH can run 
+    # Catch sigint so DEMOLISH can run
     local $SIG{INT} = sub { exit 1 };
 
     my @watch_dirs  = $self->watch_directories;
@@ -363,7 +363,7 @@ sub setup_watch {
             $path,
             (
                 # Is this is a directory?
-                ($type eq 'directory' ? 
+                ($type eq 'directory' ?
                     # Modifications I care about
                     IN_MODIFY
                     |
