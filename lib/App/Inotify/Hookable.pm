@@ -410,6 +410,13 @@ The original error was:
 
 $error
 DIE
+            } elsif ($error == ENOENT) {
+                # Don't hard die on the common race condition where a
+                # file/directory we found with our "find" call has
+                # since gone away (e.g. due to a different "git
+                # checkout" removing it).
+                $self->log("Couldn't watch $type '$path': $error");
+                next WATCH;
             } else {
                 die $error;
             }
