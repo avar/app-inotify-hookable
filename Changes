@@ -2,6 +2,16 @@ Revision history for App::Inotify::Hookable
 
 {{$NEXT}}
 
+    - I forgot to write a changelog for 0.08, this release is
+      identical to it except I'm now updating the Changes file:
+
+    - Fixed a common race condition bug where inotify-hookable would
+      just plain die if a directory it tried to watch had been deleted
+      (happens e.g. in the middle of "git checkout").
+
+      Now we just ignore that and move on, before the whola watcher
+      would just stop.
+
 0.08 2016-02-15 20:29:38
 
 0.07 2012-12-21 16:18:36
