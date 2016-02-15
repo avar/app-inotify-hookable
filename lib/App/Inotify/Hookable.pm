@@ -150,7 +150,8 @@ sub run {
     $self->log(
         "Starting up, " .
         (@watch_dirs ?
-            ($self->recursive ? "recursively " : "") .
+            ($self->recursive ? "recursively" : "non-recursively") .
+            " " .
             "watching directories <@watch_dirs>" .
             (@watch_files ? " and " : "")
         : "") .
@@ -506,6 +507,10 @@ could probably run in another process via L<POE> or
 something). Patches welcome.
 
 =head1 OPTIONS
+
+Note that boolean options can be negated with C<--no-OPTION>,
+e.g. C<--no-r> or C<--no-recursive> to turn off the C<--recursive>
+option which is on by default.
 
 =head2 C<-w> or C<--watch-directories>
 
