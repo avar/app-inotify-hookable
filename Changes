@@ -2,6 +2,8 @@ Revision history for App::Inotify::Hookable
 
 {{$NEXT}}
 
+0.08 2016-02-15 20:29:38
+
 0.07 2012-12-21 16:18:36
 
     - Use find(1) again instead of File::Find::Rule, it's noticably
