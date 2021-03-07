@@ -574,6 +574,10 @@ The regexes match after any C</> in the path or the beginning of the string.
 
 Spew out some verbose debug output while running.
 
+=head2 C<-q> or C<--[no-]quiet>
+
+Don't log noisy information
+
 =head1 ACKNOWLEDGMENT
 
 This module was originally developed at and for Booking.com. With
